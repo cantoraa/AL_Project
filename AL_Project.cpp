@@ -128,9 +128,9 @@ tile* tile_swap_prey(vector< vector<tile> >& tile_mat, prey* cur_tile, tile* nex
                     int max_x, int max_y);
 ///returns a random value distributed as a power law with param 'param' between x0 and x1
 int power_law_val(int param, int x0, int x1);
-vect boids_rule1(vector<prey*>& v_prey, int cur_prey_ind);
-vect boids_rule2(vector<prey*>& v_prey, int cur_prey_ind);
-vect boids_rule3(vector<prey*>& v_prey, int cur_prey_ind);
+vect boids_rule1(vector<prey>& v_prey, int cur_prey_ind);
+vect boids_rule2(vector<prey>& v_prey, int cur_prey_ind);
+vect boids_rule3(vector<prey>& v_prey, int cur_prey_ind);
 float vect_norm(vect v);
 
 int main(void)
@@ -563,7 +563,7 @@ void prey_move(vector<prey>& v_prey, vector< vector<tile> >& tile_mat,
     for(int i = 0 ; i < v_prey.size(); i++)
     {
         prey* cur_prey = &v_prey[i];
-
+        //cout<<"prey i: "<<i<<" before pos: ("<<v_prey[i].pos.v_x<<" , "<<v_prey[i].pos.v_y<<")"<<endl;
         v1 = boids_rule1(v_prey, i);
         v2 = boids_rule2(v_prey, i);
         v3 = boids_rule3(v_prey, i);
@@ -575,16 +575,18 @@ void prey_move(vector<prey>& v_prey, vector< vector<tile> >& tile_mat,
                 (cur_prey->velocity / vect_norm(cur_prey->velocity))
                     * cur_prey->base_speed;
         }
-
-        if(cur_prey->pos.v_x <= 0) cur_prey->pos.v_x = WIDTH + cur_prey->pos.v_x;
-        if(cur_prey->pos.v_x >= WIDTH) cur_prey->pos.v_x = cur_prey->pos.v_x - WIDTH;
-        if(cur_prey->pos.v_y <= 0) cur_prey->pos.v_y = HEIGHT + cur_prey->pos.v_y;
-        if(cur_prey->pos.v_y >= HEIGHT) cur_prey->pos.v_y = cur_prey->pos.v_y - HEIGHT;
+        //cout<<"velocity: ("<<cur_prey->velocity.v_x<<" , "<<cur_prey->velocity.v_y<<")"<<endl;
+        cur_prey->pos = cur_prey->pos + cur_prey->velocity;
+        if(cur_prey->pos.v_x < 0) cur_prey->pos.v_x = max_x + cur_prey->pos.v_x;
+        if(cur_prey->pos.v_x >= max_x) cur_prey->pos.v_x = cur_prey->pos.v_x - max_x;
+        if(cur_prey->pos.v_y < 0) cur_prey->pos.v_y = max_y + cur_prey->pos.v_y;
+        if(cur_prey->pos.v_y >= max_y) cur_prey->pos.v_y = cur_prey->pos.v_y - max_y;
 
         cur_prey->tile_pos =
             tile_swap_prey(tile_mat,cur_prey,
-                    get_tile_from_coord(cur_prey->pos.v_x, cur_prey->pos.v_y,tile_mat),
+                    &tile_mat[cur_prey->pos.v_x][cur_prey->pos.v_y],
                     max_x, max_y);
+        //cout<<"prey i: "<<i<<" after pos: ("<<v_prey[i].pos.v_x<<" , "<<v_prey[i].pos.v_y<<")"<<endl;
     }
 }
 float get_radians(float degrees)
@@ -724,7 +726,7 @@ int power_law_val(int param, int x0, int x1)
     //cout<<"val: "<<val<<endl;
     return (int)val;
 }
-vect boids_rule1(vector<prey*>& v_prey, int cur_prey_ind)
+vect boids_rule1(vector<prey>& v_prey, int cur_prey_ind)
 {
     vect pcj(0.0,0.0);
     bool in_boid = false;
@@ -732,17 +734,17 @@ vect boids_rule1(vector<prey*>& v_prey, int cur_prey_ind)
     for(int i = 0; i < v_prey.size(); i++)
     {
         if(i != cur_prey_ind &&
-            vect_norm(*v_prey[cur_prey_ind]->tile_pos->pos -
-                        *v_prey[i]->tile_pos->pos) <= v_prey[i]->vision_rad)
+            vect_norm(*v_prey[cur_prey_ind].tile_pos->pos -
+                        *v_prey[i].tile_pos->pos) <= v_prey[i].vision_rad)
         {
             in_boid = true;
-            pcj = pcj + *v_prey[i]->tile_pos->pos;
+            pcj = pcj + *v_prey[i].tile_pos->pos;
         }
     }
     if (in_boid)
     {
         pcj = pcj / (v_prey.size() - 1);
-        return (pcj - *v_prey[cur_prey_ind]->tile_pos->pos) / 100.0;
+        return (pcj - *v_prey[cur_prey_ind].tile_pos->pos) / 100.0;
     }
     else
     {
@@ -752,24 +754,24 @@ vect boids_rule1(vector<prey*>& v_prey, int cur_prey_ind)
         return pcj;
     }
 }
-vect boids_rule2(vector<prey*>& v_prey, int cur_prey_ind)
+vect boids_rule2(vector<prey>& v_prey, int cur_prey_ind)
 {
     vect c(0.0,0.0);
     for(int i = 0; i < v_prey.size(); i++)
     {
         if(i != cur_prey_ind)
         {
-            if (vect_norm(*v_prey[cur_prey_ind]->tile_pos->pos -
-                            *v_prey[i]->tile_pos->pos) < 100)
+            if (vect_norm(*v_prey[cur_prey_ind].tile_pos->pos -
+                            *v_prey[i].tile_pos->pos) < 100)
             {
-                c = c - (*v_prey[cur_prey_ind]->tile_pos->pos -
-                            *v_prey[i]->tile_pos->pos);
+                c = c - (*v_prey[cur_prey_ind].tile_pos->pos -
+                            *v_prey[i].tile_pos->pos);
             }
         }
     }
     return c;
 }
-vect boids_rule3(vector<prey*>& v_prey, int cur_prey_ind)
+vect boids_rule3(vector<prey>& v_prey, int cur_prey_ind)
 {
     vect pvj(0.0,0.0);
     bool in_boid = false;
@@ -777,17 +779,17 @@ vect boids_rule3(vector<prey*>& v_prey, int cur_prey_ind)
     for(int i = 0; i < v_prey.size(); i++)
     {
         if(i != cur_prey_ind &&
-            vect_norm(*v_prey[cur_prey_ind]->tile_pos->pos -
-                        *v_prey[i]->tile_pos->pos) <= v_prey[i]->vision_rad)
+            vect_norm(*v_prey[cur_prey_ind].tile_pos->pos -
+                        *v_prey[i].tile_pos->pos) <= v_prey[i].vision_rad)
         {
             in_boid = true;
-            pvj = pvj + v_prey[i]->velocity;
+            pvj = pvj + v_prey[i].velocity;
         }
     }
     if (in_boid)
     {
         pvj = pvj / (v_prey.size() - 1);
-        return (pvj - v_prey[cur_prey_ind]->velocity) / 10.0;
+        return (pvj - v_prey[cur_prey_ind].velocity) / 10.0;
     }
     else
     {
