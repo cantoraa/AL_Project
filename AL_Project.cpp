@@ -19,6 +19,12 @@ int tile_width, tile_height;
 enum KEYS {UP, DOWN, LEFT, RIGHT, SPACE};
 bool keys[5] = {false, false, false, false, false};
 vector<string> v_s;
+int food_per_unit, steps_hungry, adult_age, dist_to_reproduce;
+float boid1_param, boid2_param, boid3_param;
+float tend_food_param, running_food_param;
+bool run_when_hungry;
+Json::Value prey_conf_root, env_conf_root;
+default_random_engine generator;
 
 //defining the structures needed for the game
 typedef struct point point;
@@ -87,13 +93,15 @@ struct prey
     tile* tile_pos;
     vect velocity;
     vect pos;
-    int metabolism;
+    int metabolism, max_age, capacity, cur_age, cur_food;
+    bool is_dead;
     //discretized represantions of skin [1-5]
     int skin;
     //discretized represantion of affine transformation [1-5]
     int trans;
     float base_speed, run_speed;
     int vision_rad;
+    bool is_male;
 };
 struct season
 {
@@ -108,11 +116,16 @@ tree *tree_init(point* n_p, char n_axiom,
                 int n_depth, int n_length,
                 std::map<char,std::string>* n_rules,
                 int n_id, float n_angle);
-prey* prey_init(tile* tile, Json::Value spec_conf, int pow_law_param);
+prey* prey_init(tile* tile, int skin = -1, int trans = -1);
 void prey_draw(prey* prey);
 void prey_destroy(prey* prey);
 void prey_move(vector<prey>& v_prey, vector< vector<tile> >& tile_mat,
-                int max_x, int max_y);
+               int max_x, int max_y);
+void prey_reproduce(vector<prey>& v_prey, vector< vector<tile> >&tile_mat,
+                    int max_x, int max_y);
+bool prey_child_born(vector<prey>& v_prey, vector< vector<tile> >& tile_mat,
+                    vect pos, int skin, int trans, int max_x, int max_y);
+int prey_get_distance(prey* cur_prey, prey* other_prey);
 void tree_get_full_rule(tree* tree);
 void tree_draw(tree* tree);
 void tree_destroy(tree* tree);
@@ -125,12 +138,14 @@ int get_tile_distance(tile* tile1, tile* tile2, int max_x, int max_y);
 pair<float,float> get_tile_center(tile* tile);
 tile* get_tile_from_coord(int x, int y, vector< vector<tile> >& tile_mat);
 tile* tile_swap_prey(vector< vector<tile> >& tile_mat, prey* cur_tile, tile* next_tile,
-                    int max_x, int max_y);
+                     int max_x, int max_y);
 ///returns a random value distributed as a power law with param 'param' between x0 and x1
 int power_law_val(int param, int x0, int x1);
 vect boids_rule1(vector<prey>& v_prey, int cur_prey_ind);
 vect boids_rule2(vector<prey>& v_prey, int cur_prey_ind);
 vect boids_rule3(vector<prey>& v_prey, int cur_prey_ind);
+vect boids_tend_to_food(prey* prey, vect place);
+vect get_nearest_food(prey * prey, vector< vector<tile> >& tile_mat, int max_x, int max_y);
 float vect_norm(vect v);
 
 int main(void)
@@ -140,15 +155,13 @@ int main(void)
     ifstream env_prey("Prey.json");
     Json::Reader reader_env;
     Json::Reader reader_prey;
-    Json::Value env_conf_root;
-    Json::Value prey_conf_root;
     reader_env.parse(env_ifs, env_conf_root);
     reader_prey.parse(env_prey, prey_conf_root);
 
     //primitive variables
     bool done = false;
     bool redraw = true;
-    const int FPS = 5;
+    const int FPS = 30;
 
     //initializing a tree_vector
     vector<tree*> tree_vector;
@@ -201,6 +214,14 @@ int main(void)
 
     //reading the configuration for the food rate
     int food_rate = env_conf_root["food_per_second"].asInt();
+    food_per_unit = env_conf_root["food_per_unit"].asInt();
+    boid1_param = env_conf_root["boids1_param"].asFloat();
+    boid2_param = env_conf_root["boids2_param"].asFloat();
+    boid3_param = env_conf_root["boids3_param"].asFloat();
+    tend_food_param = env_conf_root["tend_to_food_param"].asFloat();
+    run_when_hungry = env_conf_root["run_when_hungry"].asFloat();
+    running_food_param = env_conf_root["running_food_param"].asFloat();
+    steps_hungry = env_conf_root["steps_to_hungry"].asInt();
 
     //reading information about seasons
     Json::Value seasons_conf = env_conf_root["seasons"];
@@ -218,15 +239,18 @@ int main(void)
     int current_season = 0;
 
     //reading information about preys
-    int pow_law_param = prey_conf_root["power_law_param"].asInt();
+
     int initial_num = prey_conf_root["initial_number"].asInt();
-    Json::Value spec_conf = prey_conf_root["species"];
+    adult_age = prey_conf_root["adult_age"].asInt();
+    dist_to_reproduce = prey_conf_root["dist_to_reproduce"].asInt();
+
     default_random_engine generator;
     uniform_int_distribution<int> x_gen(0, (WIDTH / tile_width) - 1);
     uniform_int_distribution<int> y_gen(0, (HEIGHT / tile_height) - 1);
     //creating preys from the given configuration
     vector<prey> prey_vector;
     tile* to_put;
+
     for(int i = 0; i < initial_num; i++)
     {
         //taking a random tile to put the prey
@@ -236,7 +260,8 @@ int main(void)
         }
         while(to_put->has_prey || to_put->has_predator);
         //cout<<"to_put pos: ("<<to_put->pos->v_x<<" , "<<to_put->pos->v_y<<")"<<endl;
-        prey* to_add = prey_init(to_put, spec_conf, pow_law_param);
+
+        prey* to_add = prey_init(to_put);
         //cout<<"to_add address: "<<to_add<<endl;
         prey_vector.push_back(*to_add);
         //cout<<"added to the vector"<<endl;
@@ -291,6 +316,13 @@ int main(void)
                     fps_c = 0;
                     seconds_c++;
                     season_c++;
+                    //adding one year to the preys
+                    for(int i = 0; i < prey_vector.size(); i++)
+                    {
+                        prey_vector[i].cur_age++;
+                    }
+                    //preys will reproduce each year
+                    prey_reproduce(prey_vector, tiles_mat, WIDTH / tile_width, HEIGHT / tile_height);
                 }
             }
             //it is time to add food!!
@@ -377,14 +409,36 @@ int main(void)
             }
 
             //3) drawing preys
+            //deleting dead preys
+            for(int i = 0; i < prey_vector.size(); )
+            {
+                if(prey_vector[i].is_dead)
+                {
+                    prey_vector.erase(prey_vector.begin() + i);
+                    prey_vector[i].tile_pos->has_prey = false;
+                }
+                else
+                    i++;
+            }
             for(int i = 0; i < prey_vector.size(); i++)
             {
-                //cout<<"i: "<<i<<" address: "<<&prey_vector[i]<<" tile address: "<<prey_vector[i].tile_pos<<endl;
-
+                //is the prey dead?
+                if(prey_vector[i].cur_food < 0 ||
+                        prey_vector[i].cur_age >= prey_vector[i].max_age)
+                {
+                    if(prey_vector[i].cur_food < 0)
+                        cout<<"agent i: "<<i<<" died of starving"<<endl;
+                    else
+                        cout<<"agent i: "<<i<<" died of old"<<endl;
+                    prey_vector[i].is_dead = true;
+                    continue;
+                }
                 prey_draw(&prey_vector[i]);
+                prey_vector[i].cur_food -= prey_vector[i].metabolism;
             }
 
             prey_move(prey_vector, tiles_mat, WIDTH / tile_width, HEIGHT / tile_height);
+
             al_flip_display();
             al_clear_to_color(al_map_rgb(0,0,0));
         }
@@ -419,14 +473,29 @@ tree* tree_init(point* n_p, char n_axiom,
     tree_get_full_rule(new_tree);
     return new_tree;
 }
-prey* prey_init(tile* tile, Json::Value spec_conf, int pow_law_param)
+prey* prey_init(tile* tile, int skin, int trans)
 {
+    Json::Value spec_conf = prey_conf_root["species"];
+    int pow_law_param = prey_conf_root["power_law_param"].asInt();
     prey* new_prey = (prey*)malloc(sizeof(prey));
-    new_prey->skin = 6 - power_law_val(pow_law_param, 1, 6);
-    new_prey->trans = 6 - power_law_val(pow_law_param, 1, 6);
+    if(skin == -1)
+        new_prey->skin = 6 - power_law_val(pow_law_param, 1, 6);
+    else
+        new_prey->skin = skin;
+    if(trans == -1)
+        new_prey->trans = 6 - power_law_val(pow_law_param, 1, 6);
+    else
+        new_prey->trans = trans;
     //cout<<"new prey: skin: "<<new_prey->skin<<" trans: "<<new_prey->trans<<endl;
     int spec_ind = (new_prey->skin - 1) * 5 + (new_prey->trans);
     new_prey->metabolism = spec_conf[spec_ind]["metabolism"].asInt();
+    new_prey->capacity = spec_conf[spec_ind]["capacity"].asInt();
+    new_prey->max_age = spec_conf[spec_ind]["avg_age"].asInt();
+    normal_distribution<double> distribution((float)new_prey->max_age, 10.0);
+    new_prey->max_age = (int)distribution(generator);
+    new_prey->cur_age = 0;
+    new_prey->cur_food = new_prey->capacity;
+    new_prey->is_dead = false;
     new_prey->tile_pos = tile;
     vect v_pos(tile->pos->v_x,tile->pos->v_y);
     new_prey->pos = v_pos;
@@ -434,7 +503,11 @@ prey* prey_init(tile* tile, Json::Value spec_conf, int pow_law_param)
     //cout<<"after init: "<<new_prey->tile_pos->x<<" , "<<new_prey->tile_pos->y<<endl;
     new_prey->run_speed = spec_conf[spec_ind]["max_speed"].asInt();
     new_prey->base_speed = spec_conf[spec_ind]["base_speed"].asInt();
-    new_prey->vision_rad = spec_conf[spec_ind]["vision"].asInt();
+    new_prey->vision_rad = spec_conf[spec_ind]["vision"].asInt() * 100;
+    //is this a male?
+    double r = ((double) rand() / (RAND_MAX));
+    if(r > 0.5)
+        new_prey->is_male = true;
     //adding the prey to the tile
     tile->has_prey = true;
     tile->prey_on_tile = new_prey;
@@ -555,25 +628,151 @@ void prey_destroy(prey* prey)
     if(prey)
         free(prey);
 }
+///get manhatan distance between skin and form
+int prey_get_distance(prey* cur_prey, prey* other_prey)
+{
+    return abs(cur_prey->skin - other_prey->skin) +
+        abs(cur_prey->trans - other_prey->trans);
+}
+///preys reproduce
+void prey_reproduce(vector<prey>& v_prey, vector< vector<tile> >&tile_mat,
+                    int max_x, int max_y)
+{
+    for(int i = 0; i < v_prey.size(); i++)
+    {
+        prey* cur_prey = &v_prey[i];
+        int min_dist = -1, min_ind = -1;
+        if(cur_prey->cur_age > adult_age)
+        {
+            for(int j = 0; j < v_prey.size(); j++)
+            {
+                if(j != 1)
+                {
+                    prey* other_prey = &v_prey[j];
+                    if(cur_prey->is_male^other_prey->is_male &&
+                        vect_norm(cur_prey->pos - other_prey->pos) < dist_to_reproduce)
+                    {
+                        int spec_dist = prey_get_distance(cur_prey, other_prey);
+                        if(min_dist == -1)
+                        {
+                            min_dist = spec_dist;
+                            min_ind = j;
+                            continue;
+                        }
+                        if(spec_dist < min_dist)
+                        {
+                            min_dist = spec_dist;
+                            min_ind = j;
+                        }
+                    }
+                }
+            }
+            //found some lover :p
+            if(min_dist != -1)
+            {
+                prey* lover = &v_prey[min_ind];
+                float prob = min_dist / 25;
+
+                double r = rand() % RAND_MAX;
+                if(r > prob)
+                {
+                    int tries = 0;
+                    vect middle = (cur_prey->pos + lover->pos) / 2.0;
+                    int skin = (cur_prey->skin + lover->skin) / 2;
+                    int trans = (cur_prey->trans + lover->trans) / 2;
+                    bool success =
+                        prey_child_born(v_prey, tile_mat, middle, skin, trans,
+                                        max_x, max_y);
+                    if(success)
+                    {
+                        cout<<"child was born in: ("<<middle.v_x<<" , "<<middle.v_y<<")"<<endl;
+                    }
+                }
+            }
+        }
+    }
+}
+bool prey_child_born(vector<prey>& v_prey, vector< vector<tile> >& tile_mat,
+                    vect pos, int skin, int trans, int max_x, int max_y)
+{
+    bool success = true;
+    int tries = 0;
+    tile* next_tile = &tile_mat[pos.v_x][pos.v_y];
+    while((next_tile->has_prey || next_tile->has_predator))
+    {
+        if(tries == 1)
+        {
+            success =false;
+            break;
+        }
+        double n_rand = ((double) rand() / (RAND_MAX));
+        int to_add = rand() % 3;
+        if(n_rand > 0.5)
+        {
+            if(next_tile->pos->v_x + to_add < max_x)
+            {
+                next_tile = &tile_mat[next_tile->pos->v_x + to_add][next_tile->pos->v_y];
+
+            }
+            else
+            {
+                next_tile = &tile_mat[next_tile->pos->v_x - to_add][next_tile->pos->v_y];
+            }
+        }
+        else
+        {
+            if(next_tile->pos->v_y + to_add < max_y)
+            {
+
+                next_tile = &tile_mat[next_tile->pos->v_x][next_tile->pos->v_y + to_add];
+            }
+            else
+            {
+                next_tile = &tile_mat[next_tile->pos->v_x][next_tile->pos->v_y - to_add];
+            }
+        }
+        tries++;
+    }
+    if(success)
+    {
+        v_prey.push_back(*prey_init(next_tile, skin, trans));
+    }
+    return success;
+}
 ///moving a prey according to boids algorithm
 void prey_move(vector<prey>& v_prey, vector< vector<tile> >& tile_mat,
-                int max_x, int max_y)
+               int max_x, int max_y)
 {
-    vect v1(0.0,0.0),v2(0.0,0.0),v3(0.0,0.0);
+    vect v1(0.0,0.0),v2(0.0,0.0),v3(0.0,0.0),v4(0.0,0.0);
     for(int i = 0 ; i < v_prey.size(); i++)
     {
         prey* cur_prey = &v_prey[i];
+        //should I take food?
+        if(cur_prey->tile_pos->food > 0 && cur_prey->cur_food < cur_prey->capacity)
+        {
+            cur_prey->tile_pos->food--;
+            cur_prey->cur_food+= food_per_unit;
+            continue;
+        }
         //cout<<"prey i: "<<i<<" before pos: ("<<v_prey[i].pos.v_x<<" , "<<v_prey[i].pos.v_y<<")"<<endl;
         v1 = boids_rule1(v_prey, i);
         v2 = boids_rule2(v_prey, i);
         v3 = boids_rule3(v_prey, i);
-        cur_prey->velocity = cur_prey->velocity + v1 + v2 + v3;
+        //tend to the food
+        vect nearest_food = get_nearest_food(cur_prey, tile_mat, max_x, max_y);
+        if(nearest_food.v_x != -1.0)
+        {
+            v4 = boids_tend_to_food(cur_prey, nearest_food);
+            if(run_when_hungry && cur_prey->cur_food <= (cur_prey->metabolism * steps_hungry))
+                v4 = v4 * running_food_param;
+        }
+        cur_prey->velocity = cur_prey->velocity + v1 + v2 + v3 + v4;
         //limiting the speed of the agent
         if(vect_norm(cur_prey->velocity) > cur_prey->base_speed)
         {
             cur_prey->velocity =
                 (cur_prey->velocity / vect_norm(cur_prey->velocity))
-                    * cur_prey->base_speed;
+                * cur_prey->base_speed;
         }
         //cout<<"velocity: ("<<cur_prey->velocity.v_x<<" , "<<cur_prey->velocity.v_y<<")"<<endl;
         cur_prey->pos = cur_prey->pos + cur_prey->velocity;
@@ -584,8 +783,8 @@ void prey_move(vector<prey>& v_prey, vector< vector<tile> >& tile_mat,
 
         cur_prey->tile_pos =
             tile_swap_prey(tile_mat,cur_prey,
-                    &tile_mat[cur_prey->pos.v_x][cur_prey->pos.v_y],
-                    max_x, max_y);
+                           &tile_mat[cur_prey->pos.v_x][cur_prey->pos.v_y],
+                           max_x, max_y);
         //cout<<"prey i: "<<i<<" after pos: ("<<v_prey[i].pos.v_x<<" , "<<v_prey[i].pos.v_y<<")"<<endl;
     }
 }
@@ -670,9 +869,9 @@ void add_sand(vector< vector<tile> >& tile_mat, int i,
 int get_tile_distance(tile* tile1, tile* tile2, int max_x, int max_y)
 {
     return min(abs(tile2->pos->v_x - tile1->pos->v_x),((WIDTH / tile_width) -
-                tile1->pos->v_x) + tile2->pos->v_x) +
+               tile1->pos->v_x) + tile2->pos->v_x) +
            min(abs(tile2->pos->v_y - tile1->pos->v_y),((HEIGHT / tile_height) -
-                tile1->pos->v_y) + tile2->pos->v_y);
+                   tile1->pos->v_y) + tile2->pos->v_y);
 }
 pair<float,float> get_tile_center(tile* tile)
 {
@@ -685,7 +884,7 @@ tile* get_tile_from_coord(int x, int y, vector< vector<tile> >& tile_mat)
     return &tile_mat[x / tile_width][y / tile_height];
 }
 tile* tile_swap_prey(vector< vector<tile> >& tile_mat,
-                    prey* prey, tile* next_tile, int max_x, int max_y)
+                     prey* prey, tile* next_tile, int max_x, int max_y)
 {
     tile_mat[prey->tile_pos->pos->v_x][prey->tile_pos->pos->v_y].has_prey = false;
     while(next_tile->has_prey || next_tile->has_predator)
@@ -694,21 +893,25 @@ tile* tile_swap_prey(vector< vector<tile> >& tile_mat,
         int to_add = rand() % 3;
         if(n_rand > 0.5)
         {
-            if(next_tile->pos->v_x + to_add < max_x){
+            if(next_tile->pos->v_x + to_add < max_x)
+            {
                 next_tile = &tile_mat[next_tile->pos->v_x + to_add][next_tile->pos->v_y];
 
             }
-            else{
+            else
+            {
                 next_tile = &tile_mat[next_tile->pos->v_x - to_add][next_tile->pos->v_y];
             }
         }
         else
         {
-            if(next_tile->pos->v_y + to_add < max_y){
+            if(next_tile->pos->v_y + to_add < max_y)
+            {
 
                 next_tile = &tile_mat[next_tile->pos->v_x][next_tile->pos->v_y + to_add];
             }
-            else{
+            else
+            {
                 next_tile = &tile_mat[next_tile->pos->v_x][next_tile->pos->v_y - to_add];
             }
         }
@@ -729,30 +932,30 @@ int power_law_val(int param, int x0, int x1)
 vect boids_rule1(vector<prey>& v_prey, int cur_prey_ind)
 {
     vect pcj(0.0,0.0);
-    bool in_boid = false;
+    //bool in_boid = false;
     //TODO: Taking into account the vision of the agent
     for(int i = 0; i < v_prey.size(); i++)
     {
         if(i != cur_prey_ind &&
-            vect_norm(*v_prey[cur_prey_ind].tile_pos->pos -
-                        *v_prey[i].tile_pos->pos) <= v_prey[i].vision_rad)
+                vect_norm(*v_prey[cur_prey_ind].tile_pos->pos -
+                          *v_prey[i].tile_pos->pos) <= v_prey[i].vision_rad)
         {
-            in_boid = true;
+            //in_boid = true;
             pcj = pcj + *v_prey[i].tile_pos->pos;
         }
     }
-    if (in_boid)
-    {
-        pcj = pcj / (v_prey.size() - 1);
-        return (pcj - *v_prey[cur_prey_ind].tile_pos->pos) / 100.0;
-    }
+    /*if (in_boid)
+    {*/
+    pcj = pcj / (v_prey.size() - 1);
+    return (pcj - *v_prey[cur_prey_ind].tile_pos->pos) / boid1_param;
+    /*}
     else
     {
-        //walk in random walk
+        /*walk in random walk
         pcj.v_x = rand() % 10 - 5;
         pcj.v_y = rand() % 10 - 5;
-        return pcj;
-    }
+        return pcj / 100.0;
+    }*/
 }
 vect boids_rule2(vector<prey>& v_prey, int cur_prey_ind)
 {
@@ -762,42 +965,75 @@ vect boids_rule2(vector<prey>& v_prey, int cur_prey_ind)
         if(i != cur_prey_ind)
         {
             if (vect_norm(*v_prey[cur_prey_ind].tile_pos->pos -
-                            *v_prey[i].tile_pos->pos) < 100)
+                          *v_prey[i].tile_pos->pos) < 10)
             {
                 c = c - (*v_prey[cur_prey_ind].tile_pos->pos -
-                            *v_prey[i].tile_pos->pos);
+                         *v_prey[i].tile_pos->pos);
             }
         }
     }
-    return c;
+    return c / boid2_param;
 }
 vect boids_rule3(vector<prey>& v_prey, int cur_prey_ind)
 {
     vect pvj(0.0,0.0);
-    bool in_boid = false;
+    //bool in_boid = false;
     //TODO: Taking into account the vision of the agent
     for(int i = 0; i < v_prey.size(); i++)
     {
         if(i != cur_prey_ind &&
-            vect_norm(*v_prey[cur_prey_ind].tile_pos->pos -
-                        *v_prey[i].tile_pos->pos) <= v_prey[i].vision_rad)
+                vect_norm(*v_prey[cur_prey_ind].tile_pos->pos -
+                          *v_prey[i].tile_pos->pos) <= v_prey[i].vision_rad)
         {
-            in_boid = true;
+            //in_boid = true;
             pvj = pvj + v_prey[i].velocity;
         }
     }
-    if (in_boid)
-    {
-        pvj = pvj / (v_prey.size() - 1);
-        return (pvj - v_prey[cur_prey_ind].velocity) / 10.0;
-    }
+    /*if (in_boid)
+    {*/
+    pvj = pvj / (v_prey.size() - 1);
+    return (pvj - v_prey[cur_prey_ind].velocity) / boid3_param;
+    /*}
     else
     {
-        //walk in random walk
+        /*walk in random walk
         pvj.v_x = rand() % 10 - 5;
         pvj.v_y = rand() % 10 - 5;
-        return pvj;
+        return pvj / 100.0;
+    }*/
+}
+vect boids_tend_to_food(prey* prey, vect place)
+{
+    return (place - prey->pos) / tend_food_param;
+}
+vect get_nearest_food(prey* prey, vector< vector<tile> >& tile_mat,
+                      int max_x, int max_y)
+{
+    float min_dist = -1;
+    vect to_return(-1.0,-1.0);
+    for(int i = 0; i < max_x; i++)
+    {
+        for(int j = 0; j < max_y; j++)
+        {
+            float cur_dist = vect_norm(prey->pos - *tile_mat[i][j].pos);
+            if(!tile_mat[i][j].has_prey && !tile_mat[i][j].has_predator
+                    && tile_mat[i][j].food > 0 && cur_dist < prey->vision_rad)
+            {
+                if(min_dist == -1)
+                {
+                    min_dist = cur_dist;
+                    to_return = *tile_mat[i][j].pos;
+                    continue;
+                }
+                if(cur_dist < min_dist)
+                {
+                    min_dist = cur_dist;
+                    to_return = *tile_mat[i][j].pos;
+                }
+            }
+        }
     }
+    return to_return;
 }
 float vect_norm(vect v)
 {
