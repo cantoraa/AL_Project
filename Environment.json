@@ -1,0 +1,57 @@
+{
+    "tiles":
+    {
+      "width": 8,
+      "heigth": 8,
+      "max_food": 10
+    },
+    "trees":
+    [
+      {
+       "x": 650,
+       "y": 350,
+       "axiom": "F",
+       "depth": 5,
+       "length": 1,
+       "angle": 25.7,
+       "rules":
+       [
+         {"antecedente":"F","consecuente":"F[+F]F[-F]F"}
+       ]
+      },
+      {
+       "x": 650,
+       "y": 700,
+       "axiom": "X",
+       "depth": 7,
+       "length": 1,
+       "angle": 25.7,
+       "rules":
+       [
+         {"antecedente":"X","consecuente":"F[+X][-X]FX"},
+         {"antecedente":"F","consecuente":"FF"}
+       ]
+      },
+      {
+       "x": 1200,
+       "y": 350,
+       "axiom": "X",
+       "depth": 7,
+       "length": 1,
+       "angle": 20.0,
+       "rules":
+       [
+         {"antecedente":"X","consecuente":"F[+X]F[-X]+X"},
+         {"antecedente":"F","consecuente":"FF"}
+       ]
+      }
+    ],
+    "food_per_second":200,
+    "food_per_unit": 10,
+    "run_when_hungry": true,
+    "seasons":
+    [
+      {"name":"season1","x":100,"y":200, "duration":30},
+      {"name":"season2","x":1200,"y":600, "duration":30}
+    ]
+}
