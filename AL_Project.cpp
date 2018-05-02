@@ -20,7 +20,7 @@ int tile_width, tile_height;
 enum KEYS {UP, DOWN, LEFT, RIGHT, SPACE};
 bool keys[5] = {false, false, false, false, false};
 vector<string> v_s;
-int food_per_unit, food_rate;
+int food_per_unit, food_rate, display_duration, current_display;
 int initial_num_prey, initial_num_predator;
 int adult_age_prey, adult_age_predator;
 int dist_to_reproduce_predator, dist_to_reproduce_prey;
@@ -31,6 +31,10 @@ float tend_food_param, running_food_param, run_from_pred_param;
 float tend_prey_param, tend_mate_param;
 bool run_when_hungry;
 Json::Value prey_conf_root, env_conf_root, predator_conf_root;
+ALLEGRO_BITMAP *zebra_bitmaps[5][5];
+ALLEGRO_BITMAP *cheetah_bitmaps[5][5];
+ALLEGRO_BITMAP *zebra_skins[5];
+ALLEGRO_BITMAP *cheetah_skins[5];
 default_random_engine generator(time(0));
 
 //defining the structures needed for the game
@@ -259,6 +263,7 @@ int main(void)
     //reading the configuration for the food rate
     food_rate = env_conf_root["food_per_second"].asInt();
     food_per_unit = env_conf_root["food_per_unit"].asInt();
+    display_duration = env_conf_root["display_duration"].asInt();
     run_when_hungry = env_conf_root["run_when_hungry"].asBool();
 
     //reading information about seasons
@@ -271,10 +276,13 @@ int main(void)
         seasons_v[i].duration = seasons_conf[i]["duration"].asInt();
         seasons_v[i].name = seasons_conf[i]["name"].asString();
     }
+
     int season_c = 0;
+    int display_c = 0;
     int fps_c = 0;
     int seconds_c = 0;
     int current_season = 0;
+    current_display = 0;
 
     //reading information about preys
     initial_num_prey = prey_conf_root["initial_number"].asInt();
@@ -356,6 +364,55 @@ int main(void)
     timer = al_create_timer(1.0 / FPS);
     food_timer = al_create_timer(1.0 / food_rate);
 
+    //loading bitmaps
+    const string BASE_PATH_CHEETAH =
+        "/home/andres/Desktop/Andres Cantor/AL/ALProject/cheetah_images/cheetah";
+    const string BASE_PATH_ZEBRA =
+        "/home/andres/Desktop/Andres Cantor/AL/ALProject/zebra_images/zebra";
+    const string BASE_PATH_ZEBRA_SKINS =
+        "/home/andres/Desktop/Andres Cantor/AL/ALProject/zebra_skins/zebra";
+    const string BASE_PATH_CHEETAH_SKINS =
+        "/home/andres/Desktop/Andres Cantor/AL/ALProject/cheetah_skins/cheetah";
+
+    string s_cheetah, s_zebra;
+    for(int i = 1; i <= 5; i++)
+    {
+        for(int j = 1; j <= 5; j++)
+        {
+            s_cheetah = BASE_PATH_CHEETAH + "0" +
+                            to_string(i) + "_0" + to_string(j) + ".png";
+            s_zebra = BASE_PATH_ZEBRA + "0" +
+                            to_string(i) + "_0" + to_string(j) + ".png";
+            cheetah_bitmaps[i - 1][j- 1] = al_load_bitmap(s_cheetah.c_str());
+            if(cheetah_bitmaps[i - 1][j- 1] == NULL)
+            {
+                cout<<"cheetah at: "<<i<<" , "<<j<<"not ok"<<endl;
+                cout<<"search string: "<<s_cheetah<<endl;
+            }
+            zebra_bitmaps[i - 1][j - 1] = al_load_bitmap(s_zebra.c_str());
+            if(zebra_bitmaps[i - 1][j- 1] == NULL)
+            {
+                cout<<"zebra at: "<<i<<" , "<<j<<"not ok"<<endl;
+                cout<<"search string: "<<s_zebra<<endl;
+            }
+        }
+        s_cheetah = BASE_PATH_CHEETAH_SKINS + "0" + to_string(i) + ".png";
+        s_zebra = BASE_PATH_ZEBRA_SKINS + "0" + to_string(i) + ".png";
+        cheetah_skins[i - 1] = al_load_bitmap(s_cheetah.c_str());
+        if(cheetah_skins[i - 1] == NULL)
+        {
+            cout<<"cheetah skin at: "<<i<<"not ok"<<endl;
+            cout<<"search string: "<<s_cheetah<<endl;
+        }
+        zebra_skins[i - 1] = al_load_bitmap(s_zebra.c_str());
+        if(zebra_skins[i - 1] == NULL)
+        {
+            cout<<"zebra skin at: "<<i<<"not ok"<<endl;
+            cout<<"search string: "<<s_cheetah<<endl;
+        }
+    }
+
+    //registering events
     srand(time(NULL));
     al_register_event_source(event_queue, al_get_keyboard_event_source());
     al_register_event_source(event_queue, al_get_timer_event_source(timer));
@@ -381,6 +438,16 @@ int main(void)
                     fps_c = 0;
                     seconds_c++;
                     season_c++;
+                    display_c++;
+                    if(display_c == display_duration)
+                    {
+                        display_c = 0;
+                        if(current_display == 2)
+                            current_display = 0;
+                        else
+                            current_display++;
+                    }
+
                     //adding one year to the preys
                     for(int i = 0; i < prey_vector.size(); i++)
                     {
@@ -777,9 +844,20 @@ void tree_destroy(tree* tree)
 void prey_draw(prey* prey)
 {
     pair<float,float> tile_center = get_tile_center(prey->tile_pos);
-    int spec_ind = (prey->skin - 1) * 5 +  prey->trans;
-    al_draw_filled_circle(tile_center.first, tile_center.second,
-                          tile_width / 2.0, al_map_rgb(spec_ind * (256 / 25),0,0));
+    if(current_display == 0)
+    {
+        al_draw_bitmap(zebra_bitmaps[prey->skin - 1][prey->trans - 1],tile_center.first, tile_center.second, NULL);
+    }
+    else if(current_display == 1)
+    {
+      int spec_ind = (prey->skin - 1) * 5 +  prey->trans;
+      al_draw_filled_circle(tile_center.first, tile_center.second,
+                            tile_width / 2.0, al_map_rgb(spec_ind * (256 / 25),0,0));
+    }
+    else if(current_display == 2)
+    {
+        al_draw_bitmap(zebra_skins[prey->skin - 1],tile_center.first, tile_center.second, NULL);
+    }
 }
 void prey_destroy(prey* prey)
 {
@@ -951,22 +1029,23 @@ void prey_move(vector<prey>& v_prey, vector< vector<tile> >& tile_mat,
 }
 void predator_draw(predator* predator)
 {
-    int spec_ind = (predator->skin - 1) * 5 +  predator->trans;
-    /*pair<float,float> tile_center = get_tile_center(predator->tile_pos);
-    ALLEGRO_PATH *path = al_get_standard_path(ALLEGRO_RESOURCES_PATH);
-    al_set_path_filename(path, "cheetah0101.png");
-    cout<<al_path_cstr(path, '/')<<endl;
-
-    ALLEGRO_BITMAP* pred_bitmap = al_load_bitmap(al_path_cstr(path, '/'));
-    if(pred_bitmap == NULL)
+    pair<float,float> tile_center = get_tile_center(predator->tile_pos);
+    if(current_display == 0)
     {
-        cout<<"bye xdxdd"<<endl;
+        al_draw_bitmap(cheetah_bitmaps[predator->skin - 1][predator->trans - 1],tile_center.first, tile_center.second, NULL);
     }
-    al_draw_bitmap(pred_bitmap, tile_center.first, tile_center.second, NULL);*/
-    int v_x = predator->tile_pos->pos->v_x, v_y =  predator->tile_pos->pos->v_y;
-    int s_x = v_x * tile_width, s_y = v_y * tile_height;
-    al_draw_filled_triangle(s_x, s_y +  tile_height, s_x +  tile_width, s_y + tile_height,
+    else if(current_display == 1)
+    {
+        int spec_ind = (predator->skin - 1) * 5 +  predator->trans;
+        int v_x = predator->tile_pos->pos->v_x, v_y =  predator->tile_pos->pos->v_y;
+        int s_x = v_x * tile_width, s_y = v_y * tile_height;
+        al_draw_filled_triangle(s_x, s_y +  tile_height, s_x +  tile_width, s_y + tile_height,
                             s_x + (tile_width / 2), s_y, al_map_rgb(0,spec_ind * (256 / 25),0));
+    }
+    else if(current_display == 2)
+    {
+        al_draw_bitmap(cheetah_skins[predator->skin - 1],tile_center.first, tile_center.second, NULL);
+    }
 }
 
 void predator_destroy(predator* predator)

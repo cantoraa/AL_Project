@@ -48,6 +48,7 @@
     ],
     "food_per_second":200,
     "food_per_unit": 10,
+    "display_duration": 30,
     "run_when_hungry": true,
     "seasons":
     [
