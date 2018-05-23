@@ -134,7 +134,7 @@ struct prey
     bool is_male;
     bool is_being_attacked;
     bool has_been_eaten;
-    bool* gen_code;
+    bool gen_code[48];
     //vector<bool> gen_code;
 };
 struct season
@@ -512,6 +512,7 @@ int main(void)
                     }
                     if(report_c == steps_to_report)
                     {
+                        report_c = 0;
                         int metabolism_c=0,capacity_c=0,max_age_c=0;
                         int run_speed_c=0, base_speed_c=0,vision_rad_c=0;
                         //calculating average values for preys
@@ -757,7 +758,16 @@ prey* prey_init(tile* tile, bool initial, int skin, int trans, bool* gen_code)
         vals[3] = new_prey->run_speed;
         vals[4] = new_prey->base_speed;
         vals[5] = new_prey->vision_rad;
-        new_prey->gen_code = code_gen(vals, 6);
+        bool* coded_gen = code_gen(vals, 6);
+        for(int i = 0; i < 48; i++)
+        {
+            if(coded_gen[i] > 1)
+            {
+                cout<<"*********** ERROR IN CODE INIT****************"<<endl;
+                cout<<"val: "<<coded_gen[i]<<endl;
+            }
+            new_prey->gen_code[i] = coded_gen[i];
+        }
     }
     else
     {
@@ -770,7 +780,15 @@ prey* prey_init(tile* tile, bool initial, int skin, int trans, bool* gen_code)
         new_prey->run_speed = vals[3];
         new_prey->base_speed = vals[4];
         new_prey->vision_rad = vals[5];
-        new_prey->gen_code = gen_code;
+        for(int i = 0; i < 48; i++)
+        {
+            if(gen_code[i] > 1)
+            {
+                cout<<"*********** ERROR IN CODE REPR****************"<<endl;
+                cout<<"val: "<<gen_code[i]<<endl;
+            }
+            new_prey->gen_code[i] = gen_code[i];
+        }
         /*for(int i = 0; i < 48; i++)
             new_prey->gen_code[i] = gen_code[i] ? 1 : 0;*/
     }
@@ -998,7 +1016,7 @@ void prey_reproduce(vector<prey>& v_prey, vector< vector<tile> >&tile_mat,
                     int max_x, int max_y)
 {
     //cout<<"prey reproduce"<<endl;
-    //#pragma omp parallel for num_threads(8)
+    #pragma omp parallel for num_threads(8)
     for(int i = 0; i < v_prey.size(); i++)
     {
         prey* cur_prey = &v_prey[i];
@@ -1055,6 +1073,12 @@ void prey_reproduce(vector<prey>& v_prey, vector< vector<tile> >&tile_mat,
                         bool gen_code_1[48];
                         bool gen_code_2[48];
                         bool* child_code = (bool*)malloc(48*sizeof(bool));
+                        for(int k = 0; k < 48; k++)
+                        {
+                            gen_code_1[k] = 0;
+                            gen_code_2[k] = 0;
+                            child_code[k] = 0;
+                        }
                         for(int k = 0; k < 24; k++)
                         {
                             gen_code_1[k] = cur_prey->gen_code[k] ? 1 : 0;
@@ -1163,7 +1187,7 @@ void prey_move(vector<prey>& v_prey, vector< vector<tile> >& tile_mat,
                int max_x, int max_y)
 {
 
-    //#pragma omp parallel for num_threads(8)
+    #pragma omp parallel for num_threads(8)
     for(int i = 0 ; i < v_prey.size(); i++)
     {
         vect v1(0.0,0.0),v2(0.0,0.0),v3(0.0,0.0),v4(0.0,0.0), v5(0.0,0.0);
@@ -1882,7 +1906,7 @@ bool* code_gen(int* vals, int n)
             cout<<to_add[j]<<" ";
         cout<<endl;*/
         int c=0;
-        for(int j = i; j < n; j+=6)
+        for(int j = i; j < 48; j+=6)
             to_return[j] = to_add[c++] ? 1 : 0;
     }
     /*cout<<"Resulting vector: ";

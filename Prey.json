@@ -30,7 +30,7 @@
   "power_law_param":2,
   "adult_age":4,
   "dist_to_reproduce": 2,
-  "initial_number":50,
+  "initial_number":80,
   "steps_to_hungry": 20,
   "boids1_param": 100.0,
   "boids2_param": 20.0,
