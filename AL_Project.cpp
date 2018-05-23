@@ -10,6 +10,8 @@
 #include<fstream>
 #include<random>
 #include<jsoncpp/json/json.h>
+#include<omp.h>
+#include<algorithm>
 
 using namespace std;
 
@@ -25,10 +27,12 @@ int initial_num_prey, initial_num_predator;
 int adult_age_prey, adult_age_predator;
 int dist_to_reproduce_predator, dist_to_reproduce_prey;
 int steps_hungry_predator, steps_hungry_prey;
-int affinity_threshold;
+int affinity_threshold, steps_to_reproduce;
+int steps_to_food;
 float boid1_param, boid2_param, boid3_param;
 float tend_food_param, running_food_param, run_from_pred_param;
 float tend_prey_param, tend_mate_param;
+float mutation_prob_prey, mutation_prob_pred;
 bool run_when_hungry;
 Json::Value prey_conf_root, env_conf_root, predator_conf_root;
 ALLEGRO_BITMAP *zebra_bitmaps[5][5];
@@ -102,6 +106,8 @@ struct predator
     int attack_cur_steps, attack_max_steps;
     int rest_steps;
     prey* predating;
+    bool* gen_code;
+    //vector<bool> gen_code;
 };
 struct tile
 {
@@ -128,6 +134,8 @@ struct prey
     bool is_male;
     bool is_being_attacked;
     bool has_been_eaten;
+    bool* gen_code;
+    //vector<bool> gen_code;
 };
 struct season
 {
@@ -142,8 +150,10 @@ tree *tree_init(point* n_p, char n_axiom,
                 int n_depth, int n_length,
                 std::map<char,std::string>* n_rules,
                 int n_id, float n_angle);
-prey* prey_init(tile* tile, int skin = -1, int trans = -1);
-predator* predator_init(tile* tile, int skin = -1, int trans = -1);
+prey* prey_init(tile* tile, bool init = true, int skin = -1,
+                int trans = -1, bool* gen_code = {});
+predator* predator_init(tile* tile, bool init = true, int skin = -1,
+                        int trans = -1, bool* gen_code = {});
 void prey_draw(prey* prey);
 void prey_destroy(prey* prey);
 void prey_move(vector<prey>& v_prey, vector< vector<tile> >& tile_mat,
@@ -151,7 +161,7 @@ void prey_move(vector<prey>& v_prey, vector< vector<tile> >& tile_mat,
 void prey_reproduce(vector<prey>& v_prey, vector< vector<tile> >&tile_mat,
                     int max_x, int max_y);
 bool prey_child_born(vector<prey>& v_prey, vector< vector<tile> >& tile_mat,
-                     vect pos, int skin, int trans, int max_x, int max_y);
+                     vect pos, int skin, int trans, int max_x, int max_y, bool* gen_code);
 int prey_get_distance(prey* cur_prey, prey* other_prey);
 void predator_draw(predator* predator);
 void predator_destroy(predator* predator);
@@ -192,6 +202,16 @@ vect get_nearest_predator(prey* prey, vector< vector<tile> >& tile_mat, int max_
 vect get_nearest_food_predator(predator* predator, vector< vector<tile> >& tile_mat, int max_x, int max_y);
 vect get_nearest_mate(predator* prey, vector< vector<tile> >& tile_mat, int max_x, int max_n);
 float vect_norm(vect v);
+//vector<bool> code_gen(vector<int> vals);
+bool* code_gen(int* vals, int n);
+//vector<int> decode_gen(vector<bool> code);
+int* decode_gen(bool* code, int n);
+//vector<bool> code_int(int val);
+bool* code_int(int val);
+//int decode_int(vector<bool> code);
+int decode_int(bool* code, int n);
+void mutate_code_prey(prey* prey);
+void mutate_code_predator(predator* predator);
 
 int main(void)
 {
@@ -209,7 +229,8 @@ int main(void)
     //primitive variables
     bool done = false;
     bool redraw = true;
-    const int FPS = 5;
+    bool take_food = false;
+    const int FPS = 10;
 
     //initializing a tree_vector
     vector<tree*> tree_vector;
@@ -265,7 +286,17 @@ int main(void)
     food_per_unit = env_conf_root["food_per_unit"].asInt();
     display_duration = env_conf_root["display_duration"].asInt();
     run_when_hungry = env_conf_root["run_when_hungry"].asBool();
+    steps_to_reproduce = env_conf_root["steps_to_reproduce"].asInt();
+    steps_to_food = env_conf_root["steps_to_food"].asInt();
 
+    //creating a report file for the evolution of preys
+    int steps_to_report = 10;
+    ofstream report_prey;
+    ofstream report_predator;
+    report_prey.open("evolution_prey.txt");
+    report_predator.open("evolution_predator.txt");
+    report_prey<<"metabolism,capacity,max_age,run_speed,base_speed,vision_rad\n";
+    report_predator<<"metabolism,capacity,max_age,run_speed,base_speed,vision_rad\n";
     //reading information about seasons
     Json::Value seasons_conf = env_conf_root["seasons"];
     season seasons_v[seasons_conf.size()];
@@ -283,6 +314,9 @@ int main(void)
     int seconds_c = 0;
     int current_season = 0;
     current_display = 0;
+    int reproduce_c = 0;
+    int report_c = 0;
+    int iter_c = 0;
 
     //reading information about preys
     initial_num_prey = prey_conf_root["initial_number"].asInt();
@@ -295,13 +329,14 @@ int main(void)
     run_from_pred_param = prey_conf_root["run_from_pred_param"].asFloat();
     running_food_param = prey_conf_root["running_food_param"].asFloat();
     steps_hungry_prey = prey_conf_root["steps_to_hungry"].asInt();
+    mutation_prob_prey = prey_conf_root["mutation_prob"].asFloat();
 
     uniform_int_distribution<int> x_gen(0, (WIDTH / tile_width) - 1);
     uniform_int_distribution<int> y_gen(0, (HEIGHT / tile_height) - 1);
     //creating preys from the given configuration
     vector<prey> prey_vector;
     tile* to_put;
-
+    //cout<<"before adding preys"<<endl;
     for(int i = 0; i < initial_num_prey; i++)
     {
         //taking a random tile to put the prey
@@ -326,6 +361,8 @@ int main(void)
     tend_prey_param = predator_conf_root["tend_prey_param"].asInt();
     tend_mate_param = predator_conf_root["tend_mate_param"].asInt();
     affinity_threshold = predator_conf_root["affinity_threshold"].asInt();
+    mutation_prob_pred = predator_conf_root["mutation_prod"].asFloat();
+
     //creating preys from the given configuration
     vector<predator> predator_vector;
 
@@ -380,9 +417,9 @@ int main(void)
         for(int j = 1; j <= 5; j++)
         {
             s_cheetah = BASE_PATH_CHEETAH + "0" +
-                            to_string(i) + "_0" + to_string(j) + ".png";
+                        to_string(i) + "_0" + to_string(j) + ".png";
             s_zebra = BASE_PATH_ZEBRA + "0" +
-                            to_string(i) + "_0" + to_string(j) + ".png";
+                      to_string(i) + "_0" + to_string(j) + ".png";
             cheetah_bitmaps[i - 1][j- 1] = al_load_bitmap(s_cheetah.c_str());
             if(cheetah_bitmaps[i - 1][j- 1] == NULL)
             {
@@ -429,6 +466,17 @@ int main(void)
         {
             if(ev.timer.source == timer)
             {
+                iter_c++;
+                if(iter_c == steps_to_food)
+                {
+                    iter_c = 0;
+                    take_food = true;
+                }
+                else
+                {
+                    if(take_food)
+                        take_food = false;
+                }
                 redraw = true;
                 /*if(keys[UP])
                     MoveShipUp(ship);*/
@@ -439,6 +487,8 @@ int main(void)
                     seconds_c++;
                     season_c++;
                     display_c++;
+                    reproduce_c++;
+                    report_c++;
                     if(display_c == display_duration)
                     {
                         display_c = 0;
@@ -453,9 +503,37 @@ int main(void)
                     {
                         prey_vector[i].cur_age++;
                     }
-                    //preys will reproduce each year
-                    prey_reproduce(prey_vector, tiles_mat, WIDTH / tile_width, HEIGHT / tile_height);
-                    predator_reproduce(predator_vector, tiles_mat, WIDTH / tile_width, HEIGHT / tile_height);
+                    //preys will reproduce each 'steps_to_reproduce' years
+                    if(reproduce_c == steps_to_reproduce)
+                    {
+                        prey_reproduce(prey_vector, tiles_mat, WIDTH / tile_width, HEIGHT / tile_height);
+                        predator_reproduce(predator_vector, tiles_mat, WIDTH / tile_width, HEIGHT / tile_height);
+                        reproduce_c = 0;
+                    }
+                    if(report_c == steps_to_report)
+                    {
+                        int metabolism_c=0,capacity_c=0,max_age_c=0;
+                        int run_speed_c=0, base_speed_c=0,vision_rad_c=0;
+                        //calculating average values for preys
+                        for(int i = 0; i < prey_vector.size(); i++)
+                        {
+                            metabolism_c+=prey_vector[i].metabolism;
+                            capacity_c+=prey_vector[i].capacity;
+                            max_age_c+=prey_vector[i].max_age;
+                            run_speed_c+=prey_vector[i].run_speed;
+                            base_speed_c+=prey_vector[i].base_speed;
+                            vision_rad_c+=prey_vector[i].vision_rad;
+                        }
+                        metabolism_c/=prey_vector.size();
+                        capacity_c/=prey_vector.size();
+                        max_age_c/=prey_vector.size();
+                        run_speed_c/=prey_vector.size();
+                        base_speed_c/=prey_vector.size();
+                        vision_rad_c/=prey_vector.size();
+                        report_prey<<metabolism_c<<","<<capacity_c<<
+                            ","<<max_age_c<<","<<run_speed_c<<","<<
+                            base_speed_c<<","<<vision_rad_c<<"\n";
+                    }
                 }
             }
             //it is time to add food!!
@@ -511,7 +589,6 @@ int main(void)
         if(redraw && al_is_event_queue_empty(event_queue))
         {
             redraw = false;
-
             //1) drawing tiles
             for(int i = 0; i < (WIDTH / tile_width); i++)
             {
@@ -536,6 +613,7 @@ int main(void)
                 }
             }
             //2) drawing trees
+            //#pragma omp parallel for num_threads(8)
             for(int i = 0; i < tree_vector.size(); i++)
             {
                 tree_draw(tree_vector[i]);
@@ -547,12 +625,14 @@ int main(void)
             {
                 if(prey_vector[i].is_dead)
                 {
+                    //prey_vector[i].gen_code.clear();
                     prey_vector.erase(prey_vector.begin() + i);
                     tiles_mat[prey_vector[i].pos.v_x][prey_vector[i].pos.v_y].has_prey = false;
                 }
                 else
                     i++;
             }
+            //#pragma omp parallel for num_threads(8)
             for(int i = 0; i < prey_vector.size(); i++)
             {
                 if(prey_vector[i].cur_food < 0)
@@ -573,11 +653,12 @@ int main(void)
                     prey_vector[i].is_dead = true;
                     continue;
                 }
-
+                //cout<<"starting prey draw"<<endl;
                 prey_draw(&prey_vector[i]);
-                prey_vector[i].cur_food -= prey_vector[i].metabolism;
+                if(take_food)
+                    prey_vector[i].cur_food -= prey_vector[i].metabolism;
+                //cout<<"finishing prey draw"<<endl;
             }
-
 
             //4) drawing predators
             for(int i = 0; i < predator_vector.size(); )
@@ -590,6 +671,7 @@ int main(void)
                 else
                     i++;
             }
+            //#pragma omp parallel for num_threads(8)
             for(int i = 0; i < predator_vector.size(); i++)
             {
                 //is the prey dead?
@@ -603,19 +685,24 @@ int main(void)
                     predator_vector[i].is_dead = true;
                     continue;
                 }
+                //cout<<"starting predator draw"<<endl;
                 predator_draw(&predator_vector[i]);
+                //cout<<"finishing predator draw"<<endl;
                 predator_vector[i].cur_food -= predator_vector[i].metabolism;
             }
+            //cout<<"starting prey move"<<endl;
             prey_move(prey_vector, tiles_mat, WIDTH / tile_width, HEIGHT / tile_height);
+            //cout<<"finishing prey move"<<endl;
+            //cout<<"starting predator move"<<endl;
             predator_move(predator_vector, tiles_mat,  WIDTH / tile_width, HEIGHT / tile_height);
+            //cout<<"finishing predator move"<<endl;
             al_flip_display();
             al_clear_to_color(al_map_rgb(0,0,0));
 
         }
-
     }
-
-
+    report_prey.close();
+    report_predator.close();
     al_destroy_event_queue(event_queue);
     al_destroy_timer(timer);
     al_destroy_display(display);						//destroy our display object
@@ -645,25 +732,49 @@ tree* tree_init(point* n_p, char n_axiom,
     tree_get_full_rule(new_tree);
     return new_tree;
 }
-prey* prey_init(tile* tile, int skin, int trans)
+prey* prey_init(tile* tile, bool initial, int skin, int trans, bool* gen_code)
 {
     Json::Value spec_conf = prey_conf_root["species"];
-    int pow_law_param = prey_conf_root["power_law_param"].asInt();
     bool total_vision = prey_conf_root["total_vision"].asBool();
     prey* new_prey = (prey*)malloc(sizeof(prey));
-    if(skin == -1)
+
+    if(initial)
+    {
+        int pow_law_param = prey_conf_root["power_law_param"].asInt();
         new_prey->skin = 6 - power_law_val(pow_law_param, 1, 6);
-    else
-        new_prey->skin = skin;
-    if(trans == -1)
         new_prey->trans = 6 - power_law_val(pow_law_param, 1, 6);
+        int spec_ind = (new_prey->skin - 1) * 5 + (new_prey->trans);
+        new_prey->metabolism = spec_conf[spec_ind]["metabolism"].asInt();
+        new_prey->capacity = spec_conf[spec_ind]["capacity"].asInt();
+        new_prey->max_age = spec_conf[spec_ind]["avg_age"].asInt();
+        new_prey->run_speed = spec_conf[spec_ind]["max_speed"].asInt();
+        new_prey->base_speed = spec_conf[spec_ind]["base_speed"].asInt();
+        new_prey->vision_rad = spec_conf[spec_ind]["vision"].asInt();
+        int vals[6];
+        vals[0] = new_prey->metabolism;
+        vals[1] = new_prey->capacity;
+        vals[2] = new_prey->max_age;
+        vals[3] = new_prey->run_speed;
+        vals[4] = new_prey->base_speed;
+        vals[5] = new_prey->vision_rad;
+        new_prey->gen_code = code_gen(vals, 6);
+    }
     else
+    {
+        new_prey->skin = skin;
         new_prey->trans = trans;
-    //cout<<"new prey: skin: "<<new_prey->skin<<" trans: "<<new_prey->trans<<endl;
-    int spec_ind = (new_prey->skin - 1) * 5 + (new_prey->trans);
-    new_prey->metabolism = spec_conf[spec_ind]["metabolism"].asInt();
-    new_prey->capacity = spec_conf[spec_ind]["capacity"].asInt();
-    new_prey->max_age = spec_conf[spec_ind]["avg_age"].asInt();
+        int* vals = decode_gen(gen_code, 48);
+        new_prey->metabolism = vals[0];
+        new_prey->capacity = vals[1];
+        new_prey->max_age = vals[2];
+        new_prey->run_speed = vals[3];
+        new_prey->base_speed = vals[4];
+        new_prey->vision_rad = vals[5];
+        new_prey->gen_code = gen_code;
+        /*for(int i = 0; i < 48; i++)
+            new_prey->gen_code[i] = gen_code[i] ? 1 : 0;*/
+    }
+
     normal_distribution<double> distribution((float)new_prey->max_age, 10.0);
     new_prey->max_age = (int)distribution(generator);
     new_prey->cur_age = 0;
@@ -675,10 +786,6 @@ prey* prey_init(tile* tile, int skin, int trans)
     vect v_pos(tile->pos->v_x,tile->pos->v_y);
     new_prey->pos = v_pos;
     new_prey->velocity = *new vect(1,1);
-    //cout<<"after init: "<<new_prey->tile_pos->x<<" , "<<new_prey->tile_pos->y<<endl;
-    new_prey->run_speed = spec_conf[spec_ind]["max_speed"].asInt();
-    new_prey->base_speed = spec_conf[spec_ind]["base_speed"].asInt();
-    new_prey->vision_rad = spec_conf[spec_ind]["vision"].asInt();
     if(total_vision)
         new_prey->vision_rad *= 100;
     //is this a male?
@@ -691,27 +798,50 @@ prey* prey_init(tile* tile, int skin, int trans)
 
     return new_prey;
 }
-predator* predator_init(tile* tile, int skin, int trans)
+predator* predator_init(tile* tile, bool init, int skin, int trans, bool* gen_code)
 {
     Json::Value spec_conf = predator_conf_root["species"];
-    int pow_law_param = predator_conf_root["power_law_param"].asInt();
     bool total_vision = predator_conf_root["total_vision"].asBool();
     predator* new_predator = (predator*)malloc(sizeof(predator));
-    if(skin == -1)
+
+    if(init)
+    {
+        int pow_law_param = predator_conf_root["power_law_param"].asInt();
         new_predator->skin = 6 - power_law_val(pow_law_param, 1, 6);
-    else
-        new_predator->skin = skin;
-    if(trans == -1)
         new_predator->trans = 6 - power_law_val(pow_law_param, 1, 6);
+        int spec_ind = (new_predator->skin - 1) * 5 + (new_predator->trans);
+        new_predator->metabolism = spec_conf[spec_ind]["metabolism"].asInt();
+        new_predator->capacity = spec_conf[spec_ind]["capacity"].asInt();
+        new_predator->max_age = spec_conf[spec_ind]["avg_age"].asInt();
+        //TODO: integrate these values in the simulation
+        //new_predator->attack_max_steps = spec_conf[spec_ind]["steps_bef_tired"].asInt();
+        //new_predator->rest_steps = spec_conf[spec_ind]["steps_to_rest"].asInt();
+        new_predator->run_speed = spec_conf[spec_ind]["max_speed"].asInt();
+        new_predator->base_speed = spec_conf[spec_ind]["base_speed"].asInt();
+        new_predator->vision_rad = spec_conf[spec_ind]["vision"].asInt();
+        int vals[6];
+        vals[0] = new_predator->metabolism;
+        vals[1] = new_predator->capacity;
+        vals[2] = new_predator->max_age;
+        vals[3] = new_predator->run_speed;
+        vals[4] = new_predator->base_speed;
+        vals[5] = new_predator->vision_rad;
+        new_predator->gen_code = code_gen(vals, 6);
+    }
     else
+    {
+        new_predator->skin = skin;
         new_predator->trans = trans;
-    //cout<<"new prey: skin: "<<new_predator->skin<<" trans: "<<new_predator->trans<<endl;
-    int spec_ind = (new_predator->skin - 1) * 5 + (new_predator->trans);
-    new_predator->metabolism = spec_conf[spec_ind]["metabolism"].asInt();
-    new_predator->capacity = spec_conf[spec_ind]["capacity"].asInt();
-    new_predator->max_age = spec_conf[spec_ind]["avg_age"].asInt();
-    new_predator->attack_max_steps = spec_conf[spec_ind]["steps_bef_tired"].asInt();
-    new_predator->rest_steps = spec_conf[spec_ind]["steps_to_rest"].asInt();
+        int* vals = decode_gen(gen_code, 48);
+        new_predator->metabolism = vals[0];
+        new_predator->capacity = vals[1];
+        new_predator->max_age = vals[2];
+        new_predator->run_speed = vals[3];
+        new_predator->base_speed = vals[4];
+        new_predator->vision_rad = vals[5];
+        new_predator->gen_code = gen_code;
+    }
+
     normal_distribution<double> distribution((float)new_predator->max_age, 10.0);
     new_predator->max_age = (int)distribution(generator);
     new_predator->cur_age = 0;
@@ -724,9 +854,6 @@ predator* predator_init(tile* tile, int skin, int trans)
     new_predator->pos = v_pos;
     new_predator->velocity = *new vect(1,1);
     //cout<<"after init: "<<new_predator->tile_pos->x<<" , "<<new_predator->tile_pos->y<<endl;
-    new_predator->run_speed = spec_conf[spec_ind]["max_speed"].asInt();
-    new_predator->base_speed = spec_conf[spec_ind]["base_speed"].asInt();
-    new_predator->vision_rad = spec_conf[spec_ind]["vision"].asInt();
     if(total_vision)
         new_predator->vision_rad *= 100;
     //is this a male?
@@ -736,7 +863,6 @@ predator* predator_init(tile* tile, int skin, int trans)
     //adding the prey to the tile
     tile->has_predator = true;
     tile->pred_on_tile = new_predator;
-
     return new_predator;
 }
 void tree_get_full_rule(tree* tree)
@@ -803,7 +929,6 @@ void tree_draw(tree* tree)
             {
                 cur_angle = cur_angle - 360;
             }
-
             point* n_point = next_point(cur_point, cur_angle, tree->length);
             al_draw_line(cur_point->x, cur_point->y, n_point->x, n_point->y,
                          al_map_rgb(0,255,0), 2);
@@ -850,9 +975,9 @@ void prey_draw(prey* prey)
     }
     else if(current_display == 1)
     {
-      int spec_ind = (prey->skin - 1) * 5 +  prey->trans;
-      al_draw_filled_circle(tile_center.first, tile_center.second,
-                            tile_width / 2.0, al_map_rgb(spec_ind * (256 / 25),0,0));
+        int spec_ind = (prey->skin - 1) * 5 +  prey->trans;
+        al_draw_filled_circle(tile_center.first, tile_center.second,
+                              tile_width / 2.0, al_map_rgb(spec_ind * (256 / 25),0,0));
     }
     else if(current_display == 2)
     {
@@ -872,55 +997,115 @@ int prey_get_distance(prey* cur_prey, prey* other_prey)
 void prey_reproduce(vector<prey>& v_prey, vector< vector<tile> >&tile_mat,
                     int max_x, int max_y)
 {
+    //cout<<"prey reproduce"<<endl;
+    //#pragma omp parallel for num_threads(8)
     for(int i = 0; i < v_prey.size(); i++)
     {
         prey* cur_prey = &v_prey[i];
-        int min_dist = -1, min_ind = -1;
-        if(cur_prey->cur_age > adult_age_prey &&
-            cur_prey->cur_food >= cur_prey->capacity / 2)
+        double r = ((double)rand()/(RAND_MAX));
+        if(r < mutation_prob_prey)
         {
-            for(int j = 0; j < v_prey.size(); j++)
+            //cout<<"zebra "<<i<<" has mutated"<<endl;
+            mutate_code_prey(cur_prey);
+        }
+        else
+        {
+            //cout<<"zebra "<< i <<" init reproduction with age: "<<cur_prey->cur_age<<endl;
+            int min_dist = -1, min_ind = -1;
+            if(cur_prey->cur_age > adult_age_prey &&
+                    cur_prey->cur_food >= cur_prey->capacity / 2)
             {
-                if(j != 1)
+                for(int j = 0; j < v_prey.size(); j++)
                 {
-                    prey* other_prey = &v_prey[j];
-                    if(cur_prey->is_male^other_prey->is_male &&
-                            vect_norm(cur_prey->pos - other_prey->pos) < dist_to_reproduce_prey)
+                    if(j != 1)
                     {
-                        int spec_dist = prey_get_distance(cur_prey, other_prey);
-                        if(min_dist == -1)
+                        prey* other_prey = &v_prey[j];
+                        if(cur_prey->is_male^other_prey->is_male &&
+                                vect_norm(cur_prey->pos - other_prey->pos) < dist_to_reproduce_prey)
                         {
-                            min_dist = spec_dist;
-                            min_ind = j;
-                            continue;
-                        }
-                        if(spec_dist < min_dist)
-                        {
-                            min_dist = spec_dist;
-                            min_ind = j;
+                            int spec_dist = prey_get_distance(cur_prey, other_prey);
+                            if(min_dist == -1)
+                            {
+                                min_dist = spec_dist;
+                                min_ind = j;
+                                continue;
+                            }
+                            if(spec_dist < min_dist)
+                            {
+                                min_dist = spec_dist;
+                                min_ind = j;
+                            }
                         }
                     }
                 }
-            }
-            //found some lover :p
-            if(min_dist != -1)
-            {
-                prey* lover = &v_prey[min_ind];
-                float prob = min_dist / 20;
-
-                double r = rand() % RAND_MAX;
-                if(r > prob)
+                //found some lover :p
+                if(min_dist != -1)
                 {
-                    int tries = 0;
-                    vect middle = (cur_prey->pos + lover->pos) / 2.0;
-                    int skin = (cur_prey->skin + lover->skin) / 2;
-                    int trans = (cur_prey->trans + lover->trans) / 2;
-                    bool success =
-                        prey_child_born(v_prey, tile_mat, middle, skin, trans,
-                                        max_x, max_y);
-                    if(success)
+                    prey* lover = &v_prey[min_ind];
+                    float prob = min_dist / 20;
+                    //cout<<"prob: "<<prob<<endl;
+                    double r = rand() % RAND_MAX;
+                    //cout<<"r: "<<r<<endl;
+                    if(r > prob)
                     {
-                        cout<<"child zebra was born at: ("<<middle.v_x<<" , "<<middle.v_y<<")"<<endl;
+                        int tries = 0;
+                        vect middle = (cur_prey->pos + lover->pos) / 2.0;
+                        int skin = (cur_prey->skin + lover->skin) / 2;
+                        int trans = (cur_prey->trans + lover->trans) / 2;
+                        bool gen_code_1[48];
+                        bool gen_code_2[48];
+                        bool* child_code = (bool*)malloc(48*sizeof(bool));
+                        for(int k = 0; k < 24; k++)
+                        {
+                            gen_code_1[k] = cur_prey->gen_code[k] ? 1 : 0;
+                            gen_code_2[k] = lover->gen_code[k] ? 1 : 0;
+                            gen_code_1[47 - k] =
+                                lover->gen_code[47 - k] ? 1 : 0;
+                            gen_code_2[47 - k] =
+                                cur_prey->gen_code[47 - k] ? 1 : 0;
+                        }
+                        double r_2 = rand() % RAND_MAX;
+                        bool parent_1 = false;
+                        bool print_codes = false;
+                        if(r_2 < 0.5)
+                            parent_1 = true;
+                        for(int k = 0; k < 48; k++)
+                        {
+                            if(parent_1)
+                                child_code[k] = gen_code_1[k] ? 1 : 0;
+                            else
+                                child_code[k] = gen_code_2[k] ? 1 : 0;
+                            if(child_code[k]>1)
+                                print_codes = true;
+                        }
+                        if(print_codes)
+                        {
+                        cout<<"parent 1 code: ";
+                        for(int k = 0; k < 48; k++)
+                        {
+                            cout<<cur_prey->gen_code[k]<<" ";
+                        }
+                        cout<<endl;
+                        cout<<"parent 2 code: ";
+                        for(int k = 0; k < 48; k++)
+                        {
+                            cout<<lover->gen_code[k]<<" ";
+                        }
+                        cout<<endl;
+                        cout<<"child code: ";
+                        for(int k = 0; k < 48; k++)
+                        {
+                            cout<<child_code[k]<<" ";
+                        }
+                        cout<<endl;
+                        }
+                        bool success =
+                            prey_child_born(v_prey, tile_mat, middle, skin, trans,
+                                            max_x, max_y, child_code);
+                        if(success)
+                        {
+                            cout<<"child zebra was born at: ("<<middle.v_x<<" , "<<middle.v_y<<")"<<endl;
+                        }
                     }
                 }
             }
@@ -928,7 +1113,7 @@ void prey_reproduce(vector<prey>& v_prey, vector< vector<tile> >&tile_mat,
     }
 }
 bool prey_child_born(vector<prey>& v_prey, vector< vector<tile> >& tile_mat,
-                     vect pos, int skin, int trans, int max_x, int max_y)
+                     vect pos, int skin, int trans, int max_x, int max_y, bool* gen_code)
 {
     bool success = true;
     int tries = 0;
@@ -970,17 +1155,26 @@ bool prey_child_born(vector<prey>& v_prey, vector< vector<tile> >& tile_mat,
     }
     if(success)
     {
-        v_prey.push_back(*prey_init(next_tile, skin, trans));
+        v_prey.push_back(*prey_init(next_tile, false, skin, trans, gen_code));
     }
     return success;
 }
 void prey_move(vector<prey>& v_prey, vector< vector<tile> >& tile_mat,
                int max_x, int max_y)
 {
-    vect v1(0.0,0.0),v2(0.0,0.0),v3(0.0,0.0),v4(0.0,0.0), v5(0.0,0.0);
+
+    //#pragma omp parallel for num_threads(8)
     for(int i = 0 ; i < v_prey.size(); i++)
     {
+        vect v1(0.0,0.0),v2(0.0,0.0),v3(0.0,0.0),v4(0.0,0.0), v5(0.0,0.0);
         prey* cur_prey = &v_prey[i];
+        /*cout<<"prey: "<<i<<"with the following values: "<<endl;
+        cout<<"metabolism: "<<cur_prey->metabolism<<endl;
+        cout<<"capacity: "<<cur_prey->capacity<<endl;
+        cout<<"max_age: "<<cur_prey->max_age<<endl;
+        cout<<"run_speed: "<<cur_prey->run_speed<<endl;
+        cout<<"base_speed: "<<cur_prey->base_speed<<endl;
+        cout<<"vision_rad: "<<cur_prey->vision_rad<<endl;*/
         //should I take food?
         if(cur_prey->tile_pos->food > 0 && cur_prey->cur_food < cur_prey->capacity)
         {
@@ -990,13 +1184,17 @@ void prey_move(vector<prey>& v_prey, vector< vector<tile> >& tile_mat,
         }
         //cout<<"prey i: "<<i<<" before pos: ("<<v_prey[i].pos.v_x<<" , "<<v_prey[i].pos.v_y<<")"<<endl;
         v1 = boids_rule1(v_prey, i);
+        //cout<<"calculated rule1"<<endl;
         v2 = boids_rule2(v_prey, i);
+        //cout<<"calculated rule2"<<endl;
         v3 = boids_rule3(v_prey, i);
+        //cout<<"calculated rule3"<<endl;
         //tend to the food
         vect nearest_food_prey = get_nearest_food_prey(cur_prey, tile_mat, max_x, max_y);
         if(nearest_food_prey.v_x != -1.0)
         {
             v4 = boids_tend_to_food(cur_prey, nearest_food_prey);
+            //cout<<"calculated rule4"<<endl;
             if(run_when_hungry && cur_prey->cur_food <= (cur_prey->metabolism * steps_hungry_prey))
                 v4 = v4 * running_food_param;
         }
@@ -1004,9 +1202,11 @@ void prey_move(vector<prey>& v_prey, vector< vector<tile> >& tile_mat,
         if(nearest_predator.v_x != -1.0)
         {
             v5 = boids_run_from_pred(cur_prey, nearest_predator);
+            //cout<<"calculated rule5"<<endl;
         }
         cur_prey->velocity = cur_prey->velocity + v1 + v2 + v3 + v4 + v5;
         //limiting the speed of the agent
+        //cout<<"base speed: "<<cur_prey->base_speed;
         if(vect_norm(cur_prey->velocity) > cur_prey->base_speed)
         {
             cur_prey->velocity =
@@ -1020,10 +1220,12 @@ void prey_move(vector<prey>& v_prey, vector< vector<tile> >& tile_mat,
         if(cur_prey->pos.v_y < 0) cur_prey->pos.v_y = max_y + cur_prey->pos.v_y;
         if(cur_prey->pos.v_y >= max_y) cur_prey->pos.v_y = cur_prey->pos.v_y - max_y;
         cur_prey->tile_pos->has_prey = false;
+        //cout<<"before tile swap"<<endl;
         cur_prey->tile_pos =
             tile_swap_prey(tile_mat,cur_prey,
                            &tile_mat[cur_prey->pos.v_x][cur_prey->pos.v_y],
                            max_x, max_y);
+        //cout<<"after tile swap"<<endl;
         //cout<<"prey i: "<<i<<" after pos: ("<<v_prey[i].pos.v_x<<" , "<<v_prey[i].pos.v_y<<")"<<endl;
     }
 }
@@ -1040,7 +1242,7 @@ void predator_draw(predator* predator)
         int v_x = predator->tile_pos->pos->v_x, v_y =  predator->tile_pos->pos->v_y;
         int s_x = v_x * tile_width, s_y = v_y * tile_height;
         al_draw_filled_triangle(s_x, s_y +  tile_height, s_x +  tile_width, s_y + tile_height,
-                            s_x + (tile_width / 2), s_y, al_map_rgb(0,spec_ind * (256 / 25),0));
+                                s_x + (tile_width / 2), s_y, al_map_rgb(0,spec_ind * (256 / 25),0));
     }
     else if(current_display == 2)
     {
@@ -1056,6 +1258,7 @@ void predator_destroy(predator* predator)
 void predator_move(vector<predator>& v_predator, vector< vector<tile> >& tile_mat,
                    int max_x, int max_y)
 {
+    #pragma omp parallel for num_threads(8)
     for(int i = 0; i < v_predator.size(); i++)
     {
         predator* cur_predator = &v_predator[i];
@@ -1111,7 +1314,7 @@ void predator_move(vector<predator>& v_predator, vector< vector<tile> >& tile_ma
                     predator* other_pred = &v_predator[j];
                     //is the other predator in my sigth
                     if(vect_norm(cur_predator->pos - other_pred->pos) <
-                                    cur_predator->vision_rad)
+                            cur_predator->vision_rad)
                     {
                         int dist = predator_get_distance(cur_predator, other_pred);
                         vect to_mate = tend_to_mate(cur_predator, other_pred->pos);
@@ -1148,10 +1351,13 @@ void predator_move(vector<predator>& v_predator, vector< vector<tile> >& tile_ma
             //cout<<"tile swapped"<<endl;
         }
     }
+
 }
 void predator_reproduce(vector<predator>& v_predator, vector< vector<tile> >&tile_mat,
                         int max_x, int max_y)
 {
+    //cout<<"starting predator reproduce"<<endl;
+    #pragma omp parallel for num_threads(8)
     for(int i = 0; i < v_predator.size(); i++)
     {
         predator* cur_predator = &v_predator[i];
@@ -1200,7 +1406,7 @@ void predator_reproduce(vector<predator>& v_predator, vector< vector<tile> >&til
                     int trans = (cur_predator->trans + lover->trans) / 2;
                     bool success =
                         predator_child_born(v_predator, tile_mat, middle, skin, trans,
-                                        max_x, max_y);
+                                            max_x, max_y);
                     if(success)
                     {
                         cout<<"child cheetah was born at: ("<<middle.v_x<<" , "<<middle.v_y<<")"<<endl;
@@ -1567,7 +1773,7 @@ vect get_nearest_predator(prey* prey, vector< vector<tile> >& tile_mat,
         {
             float cur_dist = vect_norm(prey->pos - *tile_mat[i][j].pos);
             if(tile_mat[i][j].has_predator && cur_dist < (prey->vision_rad)
-                && tile_mat[i][j].pred_on_tile->is_attacking)
+                    && tile_mat[i][j].pred_on_tile->is_attacking)
             {
                 if(min_dist == -1)
                 {
@@ -1643,7 +1849,7 @@ vect get_nearest_food_predator(predator* predator, vector< vector<tile> >& tile_
     return to_return;
 }
 vect get_nearest_mate(predator* predator, vector< vector<tile> >& tile_mat,
-                        int max_x, int max_y)
+                      int max_x, int max_y)
 {
     float min_dist = -1.0;
     vect to_return(-1.0,-1.0);
@@ -1659,5 +1865,164 @@ float vect_norm(vect v)
 {
     return sqrt(pow(v.v_x,2.0) + pow(v.v_y, 2.0));
 }
-
-
+bool* code_gen(int* vals, int n)
+{
+    /*cout<<"vals to decode: ";
+    for(int i = 0; i < n; i++)
+    {
+        cout<<vals[i]<<" ";
+    }
+    cout<<endl;*/
+    bool* to_return = (bool*)malloc(48*sizeof(bool));
+    for(int i = 0; i < n; i++)
+    {
+        bool* to_add = code_int(vals[i]);
+        /*cout<<"vector for value "<<vals[i]<<": ";
+        for(int j = 0; j < 8; j++)
+            cout<<to_add[j]<<" ";
+        cout<<endl;*/
+        int c=0;
+        for(int j = i; j < n; j+=6)
+            to_return[j] = to_add[c++] ? 1 : 0;
+    }
+    /*cout<<"Resulting vector: ";
+    for(int i = 0; i < 48; i++)
+    {
+        cout<<to_return[i]<<" ";
+    }
+    cout<<endl;*/
+    return to_return;
+}
+int* decode_gen(bool* code, int n)
+{
+    /*cout<<"before decoding";
+    for(int i = 0; i < n; i++)
+    {
+        cout<<code[i]<<" ";
+    }
+    cout<<endl;*/
+    int* to_return = (int*)malloc(6*sizeof(int));
+    for(int i = 0; i < 6; i++)
+    {
+        bool tmp_code[8];
+        int c = 0;
+        for(int j = i; j < n; j+=6)
+        {
+            tmp_code[c++] = code[j];
+        }
+        /*cout<<"tmp code "<<i<<": ";
+        for(int j = 0; j < 8; j++)
+        {
+            cout<<tmp_code[j]<<" ";
+        }
+        cout<<endl;*/
+        to_return[i] = decode_int(tmp_code, 8);
+        if(to_return[i] > 255)
+        {
+            cout<<"Erroneus code: ";
+            for(int j = 0; j < n; j++)
+            {
+                cout<<code[j]<<" ";
+            }
+            cout<<endl;
+        }
+    }
+    /*cout<<"decoded values: ";
+    for(int i = 0; i < 6; i++)
+    {
+        cout<<to_return[i]<<" ";
+    }
+    cout<<endl;*/
+    return to_return;
+}
+bool* code_int(int num)
+{
+    bool* v_tmp = (bool*)malloc(8*sizeof(bool));
+    bool* to_return = (bool*)malloc(8*sizeof(bool));
+    for(int i = 0; i < 8; i++)
+    {
+        v_tmp[i] = 0;
+    }
+    int c = 0;
+    int rem;
+    while(num!=0 && c < 8)
+    {
+        rem = num%2;
+        num /= 2;
+        v_tmp[c++] = rem;
+    }
+    /*cout<<"v_tmp: ";
+    for(int i = 0; i < 8; i++)
+    {
+        cout<<v_tmp[i]<<" ";
+    }
+    cout<<endl;*/
+    for(int i = 0; i < 8; i++)
+    {
+        to_return[i] = v_tmp[7 - i];
+    }
+    return to_return;
+}
+int decode_int(bool* code, int n)
+{
+    int to_return = 0;
+    int c = 0;
+    for(int i = n - 1; i >=0; i--)
+    {
+        to_return += pow(2.0, c++) * code[i];
+    }
+    if(to_return > 255)
+    {
+        cout<<"****************** CODE ERROR *****************"<<endl;
+        cout<<"code: ";
+        for(int i = 0; i < n; i++)
+        {
+            cout<<code[i]<<" ";
+        }
+        cout<<endl;
+        cout<<"decoded value: "<<to_return<<endl;
+    }
+    return to_return;
+}
+void mutate_code_prey(prey* prey)
+{
+    /*cout<<"code before mutation";
+    for(int i = 0; i < prey->gen_code.size(); i++)
+        cout<<prey->gen_code[i]<<" ";
+    cout<<endl;*/
+    uniform_int_distribution<int> pos_gen(0, 48);
+    int pos = pos_gen(generator);
+    prey->gen_code[pos] = prey->gen_code[pos] ? 0 : 1;
+    /*cout<<"code after mutation";
+    for(int i = 0; i < 48; i++)
+        cout<<prey->gen_code[i]<<" ";
+    cout<<endl;*/
+    int* vals = decode_gen(prey->gen_code, 48);
+    /*cout<<"decoded values: ";
+    for(int i = 0; i < 6; i++)
+    {
+        cout<<vals[i]<<" ";
+        if(vals[i]> 255)
+            cout<<"ERROR--------------------------"<<endl;
+    }
+    cout<<endl;*/
+    prey->metabolism = vals[0];
+    prey->capacity = vals[1];
+    prey->max_age = vals[2];
+    prey->run_speed = vals[3];
+    prey->base_speed = vals[4];
+    prey->vision_rad = vals[5];
+}
+void mutate_code_predator(predator* predator)
+{
+    uniform_int_distribution<int> pos_gen(0, 48);
+    int pos = pos_gen(generator);
+    predator->gen_code[pos] = predator->gen_code[pos] ? 0 : 1;
+    int* vals = decode_gen(predator->gen_code, 48);
+    predator->metabolism = vals[0];
+    predator->capacity = vals[1];
+    predator->max_age = vals[2];
+    predator->run_speed = vals[3];
+    predator->base_speed = vals[4];
+    predator->vision_rad = vals[5];
+}

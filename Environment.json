@@ -20,10 +20,10 @@
        ]
       },
       {
-       "x": 650,
-       "y": 700,
+       "x": 100,
+       "y": 200,
        "axiom": "X",
-       "depth": 7,
+       "depth": 6,
        "length": 1,
        "angle": 25.7,
        "rules":
@@ -34,7 +34,7 @@
       },
       {
        "x": 1200,
-       "y": 350,
+       "y": 600,
        "axiom": "X",
        "depth": 7,
        "length": 1,
@@ -49,6 +49,8 @@
     "food_per_second":200,
     "food_per_unit": 10,
     "display_duration": 30,
+    "steps_to_reproduce": 5,
+    "steps_to_food": 2,
     "run_when_hungry": true,
     "seasons":
     [
