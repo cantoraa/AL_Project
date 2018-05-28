@@ -1,6 +1,9 @@
 #include<allegro5/allegro.h>
 #include<allegro5/allegro_primitives.h>
 #include<allegro5/allegro_image.h>
+#include<boost/python.hpp>
+#include<pygtk/pygtk.h>
+#include <gtkmm.h>
 #include<vector>
 #include<string>
 #include<map>
@@ -106,7 +109,7 @@ struct predator
     int attack_cur_steps, attack_max_steps;
     int rest_steps;
     prey* predating;
-    bool* gen_code;
+    bool gen_code[48];
     //vector<bool> gen_code;
 };
 struct tile
@@ -290,7 +293,7 @@ int main(void)
     steps_to_food = env_conf_root["steps_to_food"].asInt();
 
     //creating a report file for the evolution of preys
-    int steps_to_report = 10;
+    int steps_to_report = 5;
     ofstream report_prey;
     ofstream report_predator;
     report_prey.open("evolution_prey.txt");
@@ -386,6 +389,7 @@ int main(void)
     ALLEGRO_EVENT_QUEUE *event_queue = NULL;
     ALLEGRO_TIMER *timer = NULL;
     ALLEGRO_TIMER *food_timer = NULL;
+    ALLEGRO_DISPLAY *display_chart = NULL;
 
     //Initialization Functions
     if(!al_init())										//initialize Allegro
@@ -513,8 +517,8 @@ int main(void)
                     if(report_c == steps_to_report)
                     {
                         report_c = 0;
-                        int metabolism_c=0,capacity_c=0,max_age_c=0;
-                        int run_speed_c=0, base_speed_c=0,vision_rad_c=0;
+                        double metabolism_c=0,capacity_c=0,max_age_c=0;
+                        double run_speed_c=0, base_speed_c=0,vision_rad_c=0;
                         //calculating average values for preys
                         for(int i = 0; i < prey_vector.size(); i++)
                         {
@@ -525,13 +529,38 @@ int main(void)
                             base_speed_c+=prey_vector[i].base_speed;
                             vision_rad_c+=prey_vector[i].vision_rad;
                         }
-                        metabolism_c/=prey_vector.size();
-                        capacity_c/=prey_vector.size();
-                        max_age_c/=prey_vector.size();
-                        run_speed_c/=prey_vector.size();
-                        base_speed_c/=prey_vector.size();
-                        vision_rad_c/=prey_vector.size();
+                        metabolism_c/=(float)prey_vector.size();
+                        capacity_c/=(float)prey_vector.size();
+                        max_age_c/=(float)prey_vector.size();
+                        run_speed_c/=(float)prey_vector.size();
+                        base_speed_c/=(float)prey_vector.size();
+                        vision_rad_c/=(float)prey_vector.size();
                         report_prey<<metabolism_c<<","<<capacity_c<<
+                            ","<<max_age_c<<","<<run_speed_c<<","<<
+                            base_speed_c<<","<<vision_rad_c<<"\n";
+
+                        metabolism_c=0;
+                        capacity_c=0;
+                        max_age_c=0;
+                        run_speed_c=0;
+                        base_speed_c=0;
+                        vision_rad_c=0;
+                        for(int i = 0; i < predator_vector.size(); i++)
+                        {
+                            metabolism_c+=predator_vector[i].metabolism;
+                            capacity_c+=predator_vector[i].capacity;
+                            max_age_c+=predator_vector[i].max_age;
+                            run_speed_c+=predator_vector[i].run_speed;
+                            base_speed_c+=predator_vector[i].base_speed;
+                            vision_rad_c+=predator_vector[i].vision_rad;
+                        }
+                        metabolism_c/=(float)predator_vector.size();
+                        capacity_c/=(float)predator_vector.size();
+                        max_age_c/=(float)predator_vector.size();
+                        run_speed_c/=(float)predator_vector.size();
+                        base_speed_c/=(float)predator_vector.size();
+                        vision_rad_c/=(float)predator_vector.size();
+                        report_predator<<metabolism_c<<","<<capacity_c<<
                             ","<<max_age_c<<","<<run_speed_c<<","<<
                             base_speed_c<<","<<vision_rad_c<<"\n";
                     }
@@ -813,7 +842,6 @@ prey* prey_init(tile* tile, bool initial, int skin, int trans, bool* gen_code)
     //adding the prey to the tile
     tile->has_prey = true;
     tile->prey_on_tile = new_prey;
-
     return new_prey;
 }
 predator* predator_init(tile* tile, bool init, int skin, int trans, bool* gen_code)
@@ -844,7 +872,16 @@ predator* predator_init(tile* tile, bool init, int skin, int trans, bool* gen_co
         vals[3] = new_predator->run_speed;
         vals[4] = new_predator->base_speed;
         vals[5] = new_predator->vision_rad;
-        new_predator->gen_code = code_gen(vals, 6);
+        bool* coded_gen = code_gen(vals, 6);
+        for(int i = 0; i < 48; i++)
+        {
+            if(coded_gen[i] > 1)
+            {
+                cout<<"*********** ERROR IN CODE INIT****************"<<endl;
+                cout<<"val: "<<coded_gen[i]<<endl;
+            }
+            new_predator->gen_code[i] = coded_gen[i];
+        }
     }
     else
     {
@@ -857,7 +894,15 @@ predator* predator_init(tile* tile, bool init, int skin, int trans, bool* gen_co
         new_predator->run_speed = vals[3];
         new_predator->base_speed = vals[4];
         new_predator->vision_rad = vals[5];
-        new_predator->gen_code = gen_code;
+        for(int i = 0; i < 48; i++)
+        {
+            if(gen_code[i] > 1)
+            {
+                cout<<"*********** ERROR IN CODE REPR****************"<<endl;
+                cout<<"val: "<<gen_code[i]<<endl;
+            }
+            new_predator->gen_code[i] = gen_code[i];
+        }
     }
 
     normal_distribution<double> distribution((float)new_predator->max_age, 10.0);
