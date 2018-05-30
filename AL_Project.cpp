@@ -1,9 +1,6 @@
 #include<allegro5/allegro.h>
 #include<allegro5/allegro_primitives.h>
 #include<allegro5/allegro_image.h>
-#include<boost/python.hpp>
-#include<pygtk/pygtk.h>
-#include <gtkmm.h>
 #include<vector>
 #include<string>
 #include<map>
@@ -21,6 +18,7 @@ using namespace std;
 //GLOBALS==============================
 const int WIDTH = 1280;
 const int HEIGHT = 704;
+const int MAX_SPEED = 80;
 int tile_width, tile_height;
 enum KEYS {UP, DOWN, LEFT, RIGHT, SPACE};
 bool keys[5] = {false, false, false, false, false};
@@ -293,13 +291,15 @@ int main(void)
     steps_to_food = env_conf_root["steps_to_food"].asInt();
 
     //creating a report file for the evolution of preys
-    int steps_to_report = 5;
+    int steps_to_report = 1;
     ofstream report_prey;
     ofstream report_predator;
     report_prey.open("evolution_prey.txt");
     report_predator.open("evolution_predator.txt");
-    report_prey<<"metabolism,capacity,max_age,run_speed,base_speed,vision_rad\n";
-    report_predator<<"metabolism,capacity,max_age,run_speed,base_speed,vision_rad\n";
+    report_prey<<"id,metabolism,capacity,max_age,run_speed,base_speed,vision_rad,total_prey\n";
+    report_predator<<"id,metabolism,capacity,max_age,run_speed,base_speed,vision_rad,total_pred\n";
+    report_prey.close();
+    report_predator.close();
     //reading information about seasons
     Json::Value seasons_conf = env_conf_root["seasons"];
     season seasons_v[seasons_conf.size()];
@@ -535,10 +535,11 @@ int main(void)
                         run_speed_c/=(float)prey_vector.size();
                         base_speed_c/=(float)prey_vector.size();
                         vision_rad_c/=(float)prey_vector.size();
-                        report_prey<<metabolism_c<<","<<capacity_c<<
+                        report_prey.open("evolution_prey.txt",ios_base::app);
+                        report_prey<<seconds_c<<","<<metabolism_c<<","<<capacity_c<<
                             ","<<max_age_c<<","<<run_speed_c<<","<<
-                            base_speed_c<<","<<vision_rad_c<<"\n";
-
+                            base_speed_c<<","<<vision_rad_c<<","<<prey_vector.size()<<"\n";
+                        report_prey.close();
                         metabolism_c=0;
                         capacity_c=0;
                         max_age_c=0;
@@ -560,9 +561,11 @@ int main(void)
                         run_speed_c/=(float)predator_vector.size();
                         base_speed_c/=(float)predator_vector.size();
                         vision_rad_c/=(float)predator_vector.size();
-                        report_predator<<metabolism_c<<","<<capacity_c<<
+                        report_predator.open("evolution_predator.txt",ios_base::app);
+                        report_predator<<seconds_c<<","<<metabolism_c<<","<<capacity_c<<
                             ","<<max_age_c<<","<<run_speed_c<<","<<
-                            base_speed_c<<","<<vision_rad_c<<"\n";
+                            base_speed_c<<","<<vision_rad_c<<","<<predator_vector.size()<<"\n";
+                        report_predator.close();
                     }
                 }
             }
@@ -731,8 +734,6 @@ int main(void)
 
         }
     }
-    report_prey.close();
-    report_predator.close();
     al_destroy_event_queue(event_queue);
     al_destroy_timer(timer);
     al_destroy_display(display);						//destroy our display object
@@ -2078,8 +2079,8 @@ void mutate_code_prey(prey* prey)
     prey->metabolism = vals[0];
     prey->capacity = vals[1];
     prey->max_age = vals[2];
-    prey->run_speed = vals[3];
-    prey->base_speed = vals[4];
+    prey->run_speed = min(vals[3],MAX_SPEED);
+    prey->base_speed = min(vals[4],MAX_SPEED);
     prey->vision_rad = vals[5];
 }
 void mutate_code_predator(predator* predator)
@@ -2091,7 +2092,7 @@ void mutate_code_predator(predator* predator)
     predator->metabolism = vals[0];
     predator->capacity = vals[1];
     predator->max_age = vals[2];
-    predator->run_speed = vals[3];
-    predator->base_speed = vals[4];
+    predator->run_speed = min(vals[3],MAX_SPEED);
+    predator->base_speed = min(vals[4],MAX_SPEED);
     predator->vision_rad = vals[5];
 }
