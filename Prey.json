@@ -32,12 +32,12 @@
   "dist_to_reproduce": 2,
   "initial_number":80,
   "steps_to_hungry": 20,
-  "boids1_param": 100.0,
-  "boids2_param": 20.0,
-  "boids3_param": 100.0,
-  "running_food_param": 500.0,
+  "boids1_param": 10.0,
+  "boids2_param": 10.0,
+  "boids3_param": 10.0,
+  "running_food_param": 200.0,
   "tend_to_food_param": 20.0,
-  "run_from_pred_param": -500.0,
+  "run_from_pred_param": -200.0,
   "mutation_prob": 0.0,
-  "total_vision": false
+  "total_vision": true
 }

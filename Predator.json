@@ -30,7 +30,7 @@
   "power_law_param":2,
   "adult_age":10,
   "dist_to_reproduce": 50,
-  "initial_number":4,
+  "initial_number":5,
   "steps_to_hungry": 30,
   "tend_prey_param": 200.0,
   "affinity_threshold": 3,
